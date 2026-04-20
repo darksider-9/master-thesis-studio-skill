@@ -1,6 +1,6 @@
 # Master Thesis Studio Skill
 
-面向东南大学的中文硕士论文写作与 Word 自动生成的 Codex Skill，默认适配东南大学风格硕士论文 Word 模板。它把论文创作流程拆成两层：先通过对话确认题目、章节、资产和写作边界，再通过内置 Python 脚本把 Markdown 内容安全写入 Word 模板，生成新的 `.docx` 文件。
+面向东南大学的中文硕士论文写作与 Word 自动生成的 Codex Skill，默认适配东南大学风格硕士论文 Word 模板。它把论文创作流程拆成两层：先通过对话确认题目、章节、资产和写作边界，再通过内置 Python 脚本把 Markdown 内容安全写入 Word 模板，生成新的 `.docx` 文件，打开时出现任何弹窗都点击是即可。
 
 ## 模板来源
  - 模板修改自https://seuthesis-word.github.io/ ，目前在图表目录和封面上尚未完全完成，请勿直接使用模板带封面的word，修改后的模板文件已存放在examples/中，可以在完成后再额外添加封面等摘要之前的内容。
