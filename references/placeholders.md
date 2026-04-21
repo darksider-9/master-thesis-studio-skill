@@ -22,6 +22,9 @@ The Markdown layer uses explicit tags so the XML layer can write deterministic W
 - Write figure references as `如图[[REF_FIG:description]]所示` or `见[[REF_FIG:description]]`; write table references as `如表[[REF_TBL:description]]所示` or `见[[REF_TBL:description]]`. The writer renders them as `图X-Y` and `表X-Y`.
 - Multiple references must be split as `[[REF:1]][[REF:2]]`, not `[[REF:1,2]]`.
 - Descriptions should be stable because figure/table references are matched by description.
+- If `[[TBL:description]]` is immediately followed by a Markdown pipe table, the pipe table is the authoritative data source. The writer must use those rows and must not replace them with fallback sample rows.
+- `[[FIG:description]]` should use the same stable description as the figure caption or extracted figure manifest entry. Figure embedding may match by description first and by order only as a fallback.
+- Reverse-parsed assets may include Unicode math symbols such as `∈`, `ℝ`, `⊗`, `σ`, and `λ`. Keep them if they are already readable; do not force them back to LaTeX.
 
 ## Formula Syntax
 
@@ -30,3 +33,4 @@ The Markdown layer uses explicit tags so the XML layer can write deterministic W
 - Supported conversions include `\in`, `\times`, `\cap`, `\cup`, `\otimes`, `\sigma`, `\lambda`, `\frac{...}{...}`, `^{...}`, and `_{...}`.
 - The writer must convert supported LaTeX tokens to Word OMML structures or math symbols before XML writeback; raw backslash commands should not appear in the final Word body.
 - Display formula numbering must use an ASCII period between chapter and formula number, for example `(3.1)`, not `(3-1)` or `(3－1)`.
+- Reverse parsing should preserve real OMML formula text as `[[EQ:formula]]` or `[[SYM:formula]]`, after removing old equation numbers. Avoid generic `[[EQ:公式]]` placeholders unless the formula text cannot be recovered.
