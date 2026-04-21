@@ -1,7 +1,7 @@
 ---
 name: master-thesis-studio
 描述: "用于中文硕士论文项目，尤其是东南大学风格 Word 模板或已有草稿的论文工作流。用户需要初始化论文工作区、确认题目和大纲、生成或续写中文章节 Markdown、管理参考文献/图表/表格/公式/代码/数据资产、清洗占位符，或通过内置 Word/XML 脚本安全生成 DOCX 时使用。"
-description: Use this skill for Southeast University-style master's thesis projects from a Word template or existing draft, including user intake, outline planning, chapter drafting, academic asset management, Markdown visualization, references, figures, tables, formulas, and safe DOCX generation through the bundled Word/XML scripts.
+description: Use this skill for Southeast University-style master's thesis projects from a Word template or existing draft, including optional reverse parsing of an existing DOCX, user intake, outline planning, chapter drafting, academic asset management, Markdown visualization, references, figures, tables, formulas, and safe DOCX generation through the bundled Word/XML scripts.
 ---
 
 ## UTF-8 Reading Guard
@@ -39,6 +39,7 @@ Load only the needed reference file. Do not bulk-read every Markdown file unless
 - 新 DOCX 只写入 `10_output/`。XML 中间态只写入 `09_state/`。
 - 创建新论文项目时，必须先新建一个独立项目文件夹，并把该文件夹作为论文项目根目录；不要直接在 Skill 根目录、工作区根目录或桌面散落运行初始化。
 - 初始化和后续生成命令应在该论文项目文件夹内运行，项目参数使用 `.`；调用脚本时使用 Skill 中 `scripts/` 的绝对路径，或明确从 Skill 根目录传入项目绝对路径。
+- 用户提供已有 Word 时，先确认是否需要反解析。反解析是可选入口，不是必经流程；如果用户只想把该 Word 作为格式模板，可以只初始化模板，不抽取正文内容。
 - 写回 Word 前必须检查章节 Markdown、占位符、参考文献、图表和状态文件是否一致。
 - 修改占位符、XML 写回、参考文献或章节 Markdown 规则前，先阅读对应 `references/` 文件。
 
@@ -51,6 +52,8 @@ Load only the needed reference file. Do not bulk-read every Markdown file unless
 - 当前阶段：未开始、已有想法、已有部分章节、已有完整初稿、只需格式化输出。
 - 用户希望的模式：快速初稿、边确认边写、续写已有内容、根据代码/数据转写、只做 Word 写回。
 - 已有资产：Word、Markdown、PDF、笔记、参考文献、代码、数据、图片、表格、公式、实验记录。
+- 如果已有 Word：它是“格式模板”“已有论文内容”还是“两者都是”；是否希望反解析章节、图、表、公式到项目目录。
+- 如果执行反解析：反解析后想做什么，例如只盘点资产、继续写作、修订润色、补缺失章节、重新导出 Word，或做 round-trip 校验。
 - 是否允许模拟数据、示例图表或示例实验结果。不允许时只能基于用户材料写作。
 - 使用哪个模板。默认使用 `examples/Template.docx`。
 
@@ -67,6 +70,7 @@ Load only the needed reference file. Do not bulk-read every Markdown file unless
 | --- | --- | --- | --- |
 | 0. 判断项目状态 | 项目根目录、`00_project/`、`09_state/project_state.json`、`03_chapters/` | 判断是新项目、续写项目还是只需导出；如果是新项目，先创建独立项目文件夹并进入该文件夹 | 无 |
 | 1. 初始化工作区 | 用户给定模板路径；默认模板 `examples/Template.docx` | 在当前论文项目文件夹内生成 `00_project/`、`01_template/`、`03_chapters/`、`04_figures/`、`05_tables/`、`06_code/`、`07_data/`、`08_refs/`、`09_state/`、`10_output/` | 在项目文件夹内运行：`python <skill_dir>/scripts/init_thesis_workspace.py . --template <docx_path>` |
+| 1A. 可选反解析已有 Word | 用户确认该 Word 是已有论文内容且希望抽取内容 | `03_chapters/` 章节草稿、`04_figures/` 真实图片、`05_tables/` 表格 `.md/.csv`、`09_state/reverse_parse_assets.json`、反解析报告 | `python <skill_dir>/scripts/reverse_parse_docx.py <project_dir> --docx <user.docx>` |
 | 2. 转换模板 | `01_template/original_template.docx` | `01_template/template.flat.xml` | `python scripts/flat_opc_converter.py toxml <input.docx> <output.xml>` |
 | 3. 解析模板结构 | `references/xml_mapping_spec.md`、`01_template/template.flat.xml` | `09_state/parsed_structure.json` | `python scripts/parse_template_xml.py <template.flat.xml> <parsed_structure.json>` |
 | 4. 生成项目控制文件 | `references/writing_workflow.md`、`assets/project_state.schema.json` | `00_project/*.md`、初始 `03_chapters/chXX_plan.md`、`03_chapters/chXX_draft.md`、`09_state/project_state.json` | `python scripts/generate_planning_files.py <project_dir>` |
@@ -91,6 +95,7 @@ Load only the needed reference file. Do not bulk-read every Markdown file unless
 - `08_refs/`：参考文献、文献笔记、检索记录和引用元数据。
 - `09_state/project_state.json`：脚本写回使用的结构化项目状态。
 - `09_state/current_working.xml`：当前可生成 DOCX 的 Flat OPC XML。
+- `09_state/reverse_parse_assets.json`：可选反解析生成的真实图、表资源清单和可用性标记。
 - `10_output/`：最终生成的 DOCX。
 
 ## 何时阅读 References
@@ -98,7 +103,7 @@ Load only the needed reference file. Do not bulk-read every Markdown file unless
 - 需要问诊、选择写作模式、制定大纲、规划章节或写中文学术正文时，先读 `references/writing_workflow.md`。
 - 需要使用或修改 `[[FIG:...]]`、`[[TBL:...]]`、`[[EQ:...]]`、`[[SYM:...]]`、`[[REF:...]]`、`[[REF_FIG:...]]`、`[[REF_TBL:...]]` 时，先读 `references/placeholders.md`。
 - 需要处理参考文献格式、引用占位符、GB/T 7714 或 Word 交叉引用时，先读 `references/reference_rules.md`。
-- 需要解析模板、修改 XML 写回逻辑、处理标题样式、页眉页脚、分节符、表格、公式或 DOCX 生成时，先读 `references/xml_mapping_spec.md`。
+- 需要解析模板、反解析已有 Word、修改 XML 写回逻辑、处理标题样式、页眉页脚、分节符、图、表、公式或 DOCX 生成时，先读 `references/xml_mapping_spec.md`。
 - 需要直接编辑 `09_state/project_state.json` 时，先读 `assets/project_state.schema.json`。
 
 ## 章节 Markdown 规范
@@ -184,9 +189,11 @@ Load only the needed reference file. Do not bulk-read every Markdown file unless
 
 - **从零生成初稿**：先读 `references/writing_workflow.md`，确认题目、方法、创新点、真实性边界，再生成大纲、计划和中文初稿。
 - **边做边写**：先写章节计划和资产 TODO，稳定章节可先写，实验结果、指标和图表缺失处标记待补。
-- **续写已有论文**：先读已有 Word/Markdown/PDF 和 `00_project/`，保留可用内容，只补缺失章节或薄弱部分。
+- **续写已有论文**：先确认是否反解析已有 Word。若用户同意，运行反解析并让用户查看 `03_chapters/`、`04_figures/`、`05_tables/` 后，再决定续写、润色、补章节或导出。
 - **资产转写论文**：先读 `06_code/`、`07_data/`、`04_figures/`、`05_tables/` 和 manifest，确认资产含义，再转写为方法、实验或结果分析。
 - **格式整理与 Word 输出**：先清洗 Markdown、规范占位符和引用，再执行 XML 写回、DOCX 生成和校验。
+- **已有 Word 资产盘点**：只抽取章节、图、表、公式和 manifest，不直接重写正文。适合用户想先了解已有论文可复用内容的情况。
+- **Round-trip 校验**：反解析后再写回 Word，对比章节、图、表、公式和资源数量。适合验证模板兼容性或脚本改动。
 
 ## 写作要求
 
@@ -208,6 +215,14 @@ cd <project_dir>
 python <skill_dir>/scripts/init_thesis_workspace.py . --template <docx_path>
 ```
 
+如果用户提供的是已有论文内容，并且明确希望解析它，可以直接运行可选反解析入口：
+
+```bash
+python <skill_dir>/scripts/reverse_parse_docx.py <project_dir> --docx <user_thesis.docx>
+```
+
+反解析完成后先让用户选择下一步：只查看资产、继续写作、修订润色、补缺失章节、重新导出 Word，或执行 round-trip 校验。不要默认立刻重写全文。
+
 在项目文件夹内运行时，项目参数使用 `.`，脚本路径使用 Skill 的绝对路径：
 
 ```bash
@@ -226,6 +241,7 @@ python <skill_dir>/scripts/reference_tools.py format <refs.json> --style "GB/T 7
 
 ```bash
 python scripts/embed_figures_docx.py <input.docx> <output.docx> <figure1.svg> [figure2.svg ...]
+python scripts/reverse_parse_docx.py <project_dir> --docx <user_thesis.docx>
 ```
 
 不要直接运行 `scripts/word_xml_core.py`，它是公共脚本导入的内部 Word/XML 引擎。
@@ -239,6 +255,7 @@ python scripts/embed_figures_docx.py <input.docx> <output.docx> <figure1.svg> [f
 - 占位符使用标准形式，必要时已阅读 `references/placeholders.md`。
 - 参考文献未补齐处使用 `[[REF:KEYWORD_PLACEHOLDER: 关键词]]`。
 - 图表、代码、数据资产已在对应 manifest 中记录。
+- 如果项目来自反解析，检查 `09_state/reverse_parse_assets.json` 中图、表是否为 `usable=true`；只把可用资源当作真实资产。
 - `09_state/project_state.json` 结构合法，必要时参考 `assets/project_state.schema.json`。
 
 运行 `apply_markdown_to_xml.py` 后检查：
@@ -259,6 +276,7 @@ python scripts/embed_figures_docx.py <input.docx> <output.docx> <figure1.svg> [f
 - 如果 `draft_files` 为空，检查章节正文是否命名为 `ch*.md`，且不是 `*_plan.md`。
 - 如果只有一章，检查 `09_state/project_state.json` 是否仍是模板解析出的旧结构；重新运行 `apply_markdown_to_xml.py` 会根据当前 Markdown 重建章节结构。
 - 如果 Word 没有出现表格，检查是否使用了标准 `[[TBL:...]]` 或 Markdown 表格。
+- 如果反解析后的公式变成空泛占位，重新运行最新版 `reverse_parse_docx.py`；正常结果应是 `[[EQ:真实公式]]` 或 `[[SYM:真实符号]]`，不应只有 `[[EQ:公式]]`。
 - 如果引用显示异常，检查是否使用了 `[[REF:n]]` 或 `[[REF:KEYWORD_PLACEHOLDER: 关键词]]`，并阅读 `references/reference_rules.md`。
 - 如果公式中残留反斜杠命令，检查公式是否超出 `references/placeholders.md` 支持的有限 LaTeX 语法。
 
