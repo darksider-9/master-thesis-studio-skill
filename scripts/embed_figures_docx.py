@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 import shutil
 import zipfile
 
@@ -24,6 +25,23 @@ def qn(ns: str, local: str) -> str:
 
 def para_text(p: etree._Element) -> str:
     return "".join(t.text or "" for t in p.findall(".//w:t", namespaces=NS)).strip()
+
+
+def normalize_key(text: str) -> str:
+    return "".join(ch.lower() for ch in (text or "") if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
+
+
+def caption_desc_from_text(text: str) -> str:
+    value = re.sub(r"\s+", " ", text or "").strip()
+    value = re.sub(r"^图\s*", "", value)
+    value = re.sub(r"^[\(（]?\s*[零〇一二三四五六七八九十百\d]+(?:[-.．]\d+)*(?:\s*[)）])?\s*", "", value)
+    value = re.sub(r"^[\s:：、.．-]+", "", value)
+    return value.strip() or re.sub(r"\s+", " ", text or "").strip()
+
+
+def is_figure_caption(p: etree._Element) -> bool:
+    text = re.sub(r"\s+", " ", para_text(p)).strip()
+    return bool(re.match(r"^图\s*[（(]?[零〇一二三四五六七八九十百\d]", text))
 
 
 def next_rid(rels_root: etree._Element) -> str:
@@ -73,8 +91,51 @@ def drawing_para(rel_id: str, name: str, cx: int = 4800000, cy: int = 2700000) -
 
 
 def is_image_placeholder_text(text: str) -> bool:
-    compact = (text or "").replace(" ", "")
-    return "\u63d2\u5165\u56fe\u7247" in compact or "\u63d2\u5165\u56fe" in compact
+    compact = re.sub(r"\s+", "", text or "")
+    return bool(re.fullmatch(r"[（(]?在此处插入图(?:片)?(?:[:：].*?)?[）)]?", compact))
+
+
+def placeholder_slots(doc_root: etree._Element) -> list[dict[str, object]]:
+    paragraphs = doc_root.findall(".//w:p", namespaces=NS)
+    slots: list[dict[str, object]] = []
+    for idx, para in enumerate(paragraphs):
+        if not is_image_placeholder_text(para_text(para)):
+            continue
+        caption_para = None
+        if idx + 1 < len(paragraphs) and is_figure_caption(paragraphs[idx + 1]):
+            caption_para = paragraphs[idx + 1]
+        elif idx > 0 and is_figure_caption(paragraphs[idx - 1]):
+            caption_para = paragraphs[idx - 1]
+        caption_text = para_text(caption_para) if caption_para is not None else ""
+        desc = caption_desc_from_text(caption_text) if caption_text else ""
+        slots.append({"para": para, "desc": desc, "caption_text": caption_text, "index": idx})
+    return slots
+
+
+def assign_figures_to_slots(slots: list[dict[str, object]], figures: list[Path]) -> list[tuple[dict[str, object], Path]]:
+    assignments: list[tuple[dict[str, object], Path]] = []
+    used: set[Path] = set()
+    normalized_files = [(fig, normalize_key(fig.stem)) for fig in figures]
+
+    for slot in slots:
+        desc_key = normalize_key(str(slot.get("desc") or ""))
+        if not desc_key:
+            continue
+        matched: Path | None = None
+        for fig, fig_key in normalized_files:
+            if fig in used:
+                continue
+            if desc_key in fig_key or fig_key in desc_key:
+                matched = fig
+                break
+        if matched is not None:
+            assignments.append((slot, matched))
+            used.add(matched)
+
+    remaining_slots = [slot for slot in slots if all(slot is not assigned[0] for assigned in assignments)]
+    remaining_figures = [fig for fig in figures if fig not in used]
+    assignments.extend(zip(remaining_slots, remaining_figures))
+    return assignments
 
 
 def embed_figures(input_docx: Path, output_docx: Path, figures: list[Path]) -> None:
@@ -99,18 +160,17 @@ def embed_figures(input_docx: Path, output_docx: Path, figures: list[Path]) -> N
     rels_root = rels_tree.getroot()
     ensure_svg_content_type(ct_tree.getroot())
 
-    placeholders = [p for p in doc_root.findall(".//w:p", namespaces=NS) if is_image_placeholder_text(para_text(p))]
-    count = min(len(placeholders), len(figures))
-    for i in range(count):
-        fig = figures[i].resolve()
-        target_name = f"generated_fig_{i + 1}{fig.suffix.lower()}"
+    slots = placeholder_slots(doc_root)
+    assignments = assign_figures_to_slots(slots, [fig.resolve() for fig in figures])
+    for i, (slot, fig) in enumerate(assignments, start=1):
+        target_name = f"generated_fig_{i}{fig.suffix.lower()}"
         shutil.copy(fig, media_dir / target_name)
         rid = next_rid(rels_root)
         rel = etree.SubElement(rels_root, qn(REL_NS, "Relationship"))
         rel.set("Id", rid)
         rel.set("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image")
         rel.set("Target", f"media/{target_name}")
-        para = placeholders[i]
+        para = slot["para"]
         parent = para.getparent()
         parent.replace(para, drawing_para(rid, target_name))
 

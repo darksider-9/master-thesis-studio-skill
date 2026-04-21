@@ -27,9 +27,7 @@ def outline_lines(chapters: list[dict[str, Any]]) -> list[str]:
 
 
 def chapter_file_index(chapter: dict[str, Any], fallback: int) -> str:
-    raw = chapter.get("id") or f"ch_{fallback}"
-    digits = "".join(c for c in raw if c.isdigit())
-    return f"{int(digits or fallback):02d}"
+    return f"{fallback:02d}"
 
 
 def make_plan(chapter: dict[str, Any]) -> str:

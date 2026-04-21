@@ -160,6 +160,39 @@ def has_omml(p: etree._Element) -> bool:
     return bool(p.findall(".//m:oMath", namespaces=NS) or p.findall(".//m:oMathPara", namespaces=NS))
 
 
+def strip_extracted_equation_number(text: str) -> str:
+    value = normalize_title(text)
+    value = re.sub(r"\s*#\s*[\(（]\s*\d+(?:[.．-]\d+)*\s*[\)）]\s*$", "", value)
+    return value.strip()
+
+
+def omml_text(node: etree._Element) -> str:
+    return strip_extracted_equation_number("".join(t.text or "" for t in node.findall(".//m:t", namespaces=NS)))
+
+
+def paragraph_markdown_with_math(p: etree._Element) -> str:
+    parts: list[str] = []
+    for child in p:
+        child_name = etree.QName(child).localname
+        child_ns = etree.QName(child).namespace
+        if child_ns == W_NS and child_name == "r":
+            text = "".join(t.text or "" for t in child.findall(".//w:t", namespaces=NS))
+            if text:
+                parts.append(text)
+        elif child_ns == M_NS and child_name == "oMath":
+            expr = omml_text(child)
+            if expr:
+                parts.append(f"[[SYM:{expr}]]")
+        elif child_ns == M_NS and child_name == "oMathPara":
+            expr = omml_text(child)
+            if expr:
+                parts.append(f"[[EQ:{expr}]]")
+    if not parts:
+        expr = omml_text(p)
+        return f"[[EQ:{expr}]]" if expr else ""
+    return cleanup_spacing("".join(parts)).strip()
+
+
 def has_image_like(p: etree._Element) -> bool:
     return bool(
         p.findall(".//w:drawing", namespaces=NS)
@@ -313,6 +346,12 @@ def placeholder_id(raw: str) -> str:
     return match.group(1).strip() if match else raw
 
 
+def placeholder_display_text(raw: str) -> str:
+    parts = [part.strip() for part in (raw or "").split("|")]
+    display = [part for part in parts if part and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*=.*", part)]
+    return " | ".join(display).strip()
+
+
 def resolve_visual_ref(keyword: str, mapping: dict[str, int], prefix: str, chapter_index: int) -> str:
     kw = (keyword or "").strip()
     if not kw:
@@ -332,13 +371,15 @@ def render_visual_references_for_chapter(chapter: dict[str, Any], chapter_index:
     for node in nodes:
         content = node.get("content") or ""
         for match in re.finditer(r"\[\[FIG:(.*?)\]\]", content, flags=re.S):
-            key = placeholder_id(match.group(1))
-            if key and key not in fig_map:
-                fig_map[key] = len(fig_map) + 1
+            raw = match.group(1)
+            for key in {placeholder_id(raw), placeholder_display_text(raw)}:
+                if key and key not in fig_map:
+                    fig_map[key] = len(fig_map) + 1
         for match in re.finditer(r"\[\[TBL:(.*?)\]\]", content, flags=re.S):
-            key = placeholder_id(match.group(1))
-            if key and key not in tbl_map:
-                tbl_map[key] = len(tbl_map) + 1
+            raw = match.group(1)
+            for key in {placeholder_id(raw), placeholder_display_text(raw)}:
+                if key and key not in tbl_map:
+                    tbl_map[key] = len(tbl_map) + 1
 
     for node in nodes:
         content = node.get("content") or ""
@@ -881,6 +922,88 @@ def markdown_table_rows(chunk: str) -> list[list[str]]:
     return rows if len(rows) > 1 else []
 
 
+def image_placeholder_text(desc: str) -> str:
+    desc = normalize_title(desc)
+    return f"（在此处插入图片：{desc}）" if desc else "（在此处插入图片）"
+
+
+def caption_desc_from_text(text: str, label: str) -> str:
+    value = normalize_title(text)
+    if not value:
+        return ""
+    value = re.sub(rf"^{re.escape(label)}\s*", "", value)
+    value = re.sub(r"^[\(（]?\s*[零〇一二三四五六七八九十百\d]+(?:[-.．]\d+)*(?:\s*[)）])?\s*", "", value)
+    value = re.sub(r"^[\s:：、.．-]+", "", value)
+    return value.strip() or normalize_title(text)
+
+
+def caption_kind(node: etree._Element) -> str | None:
+    if etree.QName(node).localname != "p":
+        return None
+    raw = normalize_title(para_text(node))
+    text = normalize_for_match(raw)
+    looks_like_caption = has_field_seq(node) or bool(re.match(r"^[图表]\s*[（(]?[零〇一二三四五六七八九十百\d]", raw))
+    if not looks_like_caption:
+        return None
+    if "表" in text:
+        return "table"
+    if "图" in text:
+        return "figure"
+    return None
+
+
+def caption_desc_for_kind(node: etree._Element, kind: str) -> str:
+    label = "表" if kind == "table" else "图"
+    return caption_desc_from_text(para_text(node), label)
+
+
+def adjacent_caption_desc(nodes: list[etree._Element], index: int, kind: str) -> str:
+    offsets = (1, -1) if kind == "figure" else (-1, 1)
+    for offset in offsets:
+        pos = index + offset
+        if 0 <= pos < len(nodes):
+            node = nodes[pos]
+            if etree.QName(node).localname == "p" and caption_kind(node) == kind:
+                return caption_desc_for_kind(node, kind)
+    return ""
+
+
+def table_cell_text(tc: etree._Element) -> str:
+    parts = [cleanup_spacing(normalize_title(para_text(p))) for p in tc.findall("./w:p", namespaces=NS)]
+    text = " ".join(part for part in parts if part)
+    if text:
+        return text
+    return cleanup_spacing(normalize_title(para_text(tc)))
+
+
+def markdown_table_from_rows(rows: list[list[str]]) -> str:
+    if not rows:
+        return ""
+    col_count = max((len(row) for row in rows), default=0)
+    if col_count <= 0:
+        return ""
+    padded = [row + [""] * (col_count - len(row)) for row in rows]
+    if len(padded) == 1:
+        padded.append([""] * col_count)
+
+    def fmt(row: list[str]) -> str:
+        escaped = [cell.replace("|", r"\|") for cell in row]
+        return "| " + " | ".join(escaped) + " |"
+
+    lines = [fmt(padded[0]), "| " + " | ".join(["---"] * col_count) + " |"]
+    lines.extend(fmt(row) for row in padded[1:])
+    return "\n".join(lines)
+
+
+def table_to_markdown(tbl: etree._Element) -> str:
+    rows: list[list[str]] = []
+    for tr in tbl.findall("./w:tr", namespaces=NS):
+        row = [table_cell_text(tc) for tc in tr.findall("./w:tc", namespaces=NS)]
+        if any(cell for cell in row):
+            rows.append(row)
+    return markdown_table_from_rows(rows)
+
+
 def create_content_nodes(
     content_raw: str,
     protos: Prototypes,
@@ -897,15 +1020,18 @@ def create_content_nodes(
     processed = re.sub(r"(\[\[(?:FIG|TBL|EQ):[\s\S]*?\]\])", r"\n\n\1\n\n", content_raw)
     chunks = [p.strip() for p in re.split(r"\n\s*\n", processed) if p.strip()]
     nodes: list[etree._Element] = []
+    index = 0
 
-    for chunk in chunks:
+    while index < len(chunks):
+        chunk = chunks[index]
         if chunk.startswith("[[FIG:"):
             counters["fig"] += 1
-            desc = re.sub(r"^\[\[FIG:", "", chunk)
-            desc = re.sub(r"\]\]$", "", desc).strip()
+            raw_desc = re.sub(r"^\[\[FIG:", "", chunk)
+            raw_desc = re.sub(r"\]\]$", "", raw_desc).strip()
+            desc = placeholder_display_text(raw_desc) or "图片"
             bm_id = next_global_id()
             bm_name = f"_Fig_{bm_id}"
-            p_img = clone_para_with_text(base_proto, "（在此处插入图片）")
+            p_img = clone_para_with_text(base_proto, image_placeholder_text(desc))
             set_paragraph_alignment(p_img, "center")
             apply_style_overrides(p_img, (style_settings or {}).get("body"))
             nodes.append(p_img)
@@ -921,12 +1047,14 @@ def create_content_nodes(
             p_cap.append(clean_run(sample_run, "  " + desc))
             apply_style_overrides(p_cap, (style_settings or {}).get("caption"))
             nodes.append(p_cap)
+            index += 1
             continue
 
         if chunk.startswith("[[TBL:"):
             counters["tbl"] += 1
-            desc = re.sub(r"^\[\[TBL:", "", chunk)
-            desc = re.sub(r"\]\]$", "", desc).strip()
+            raw_desc = re.sub(r"^\[\[TBL:", "", chunk)
+            raw_desc = re.sub(r"\]\]$", "", raw_desc).strip()
+            desc = placeholder_display_text(raw_desc) or "表格"
             bm_id = next_global_id()
             bm_name = f"_Tbl_{bm_id}"
             p_cap = empty_para_except_ppr(deepcopy(first_present(protos.caption, base_proto)))
@@ -940,12 +1068,16 @@ def create_content_nodes(
             p_cap.append(clean_run(sample_run, "  " + desc))
             apply_style_overrides(p_cap, (style_settings or {}).get("caption"))
             nodes.append(p_cap)
-            nodes.append(create_simple_table(table_rows_for_desc(desc), sample_run, protos.table))
+            next_rows = markdown_table_rows(chunks[index + 1]) if index + 1 < len(chunks) else []
+            rows = next_rows or table_rows_for_desc(desc)
+            nodes.append(create_simple_table(rows, sample_run, protos.table))
+            index += 2 if next_rows else 1
             continue
 
         table_rows = markdown_table_rows(chunk)
         if table_rows:
             nodes.append(create_simple_table(table_rows, sample_run, protos.table))
+            index += 1
             continue
 
         if chunk.startswith("[[EQ:"):
@@ -958,6 +1090,7 @@ def create_content_nodes(
             o_math = etree.SubElement(o_math_para, qn(M_NS, "oMath"))
             append_math_children(o_math, f"{eq_text}#({chapter_index}{sep}{counters['eq']})")
             nodes.append(p_eq)
+            index += 1
             continue
 
         p = empty_para_except_ppr(deepcopy(base_proto))
@@ -980,6 +1113,7 @@ def create_content_nodes(
                 p.append(clean_run(sample_run, part))
         apply_style_overrides(p, (style_settings or {}).get("body"))
         nodes.append(p)
+        index += 1
 
     return nodes
 
@@ -998,10 +1132,11 @@ def extract_chapters_from_root(root: etree._Element) -> dict[str, Any]:
     def target() -> dict[str, Any] | None:
         return current_l3 or current_l2 or current_l1
 
-    for node in body:
+    body_nodes = [node for node in body if etree.QName(node).localname in {"p", "tbl"}]
+    idx = 0
+    while idx < len(body_nodes):
+        node = body_nodes[idx]
         local = etree.QName(node).localname
-        if local not in {"p", "tbl"}:
-            continue
         text = para_text(node).strip() if local == "p" else ""
         style_id = extract_style_id(node) if local == "p" else None
         if style_id == heading_styles.get(1) and text:
@@ -1010,29 +1145,57 @@ def extract_chapters_from_root(root: etree._Element) -> dict[str, Any]:
             chapters.append(current_l1)
             current_l2 = None
             current_l3 = None
+            idx += 1
         elif style_id == heading_styles.get(2) and text and current_l1 is not None:
             index += 1
             current_l2 = {"id": f"sec_{index}", "title": text, "level": 2, "content": "", "subsections": []}
             current_l1["subsections"].append(current_l2)
             current_l3 = None
+            idx += 1
         elif style_id == heading_styles.get(3) and text and current_l2 is not None:
             index += 1
             current_l3 = {"id": f"sub_{index}", "title": text, "level": 3, "content": "", "subsections": []}
             current_l2["subsections"].append(current_l3)
+            idx += 1
         else:
             active = target()
             if active is None:
+                idx += 1
                 continue
+            if local == "p":
+                kind = caption_kind(node)
+                prev_is_image = idx > 0 and etree.QName(body_nodes[idx - 1]).localname == "p" and has_image_like(body_nodes[idx - 1])
+                next_is_image = (
+                    idx + 1 < len(body_nodes)
+                    and etree.QName(body_nodes[idx + 1]).localname == "p"
+                    and has_image_like(body_nodes[idx + 1])
+                )
+                next_is_table = idx + 1 < len(body_nodes) and etree.QName(body_nodes[idx + 1]).localname == "tbl"
+                if (kind == "figure" and (prev_is_image or next_is_image)) or (kind == "table" and next_is_table):
+                    idx += 1
+                    continue
             if local == "tbl":
-                active["content"] += "\n\n[[TBL:包含一个表格]]\n\n"
+                desc = adjacent_caption_desc(body_nodes, idx, "table") or "包含一个表格"
+                active["content"] += f"\n\n[[TBL:{desc}]]\n\n"
+                md_table = table_to_markdown(node)
+                if md_table:
+                    active["content"] += md_table + "\n\n"
+            elif local == "p" and has_image_like(node):
+                desc = adjacent_caption_desc(body_nodes, idx, "figure") or "包含图片"
+                active["content"] += f"\n\n[[FIG:{desc}]]\n\n"
+                idx += 1
+                continue
+            elif local == "p" and has_omml(node):
+                math_md = paragraph_markdown_with_math(node)
+                if math_md:
+                    active["content"] += f"\n\n{math_md}\n\n"
+                if text and len(preview) < 2000:
+                    preview += text + " "
             elif text:
-                if has_image_like(node):
-                    active["content"] += "\n\n[[FIG:包含图片]]\n\n"
-                if has_omml(node):
-                    active["content"] += "\n\n[[EQ:公式]]\n\n"
                 active["content"] += text + "\n\n"
                 if len(preview) < 2000:
                     preview += text + " "
+            idx += 1
 
     return {
         "chapters": chapters,
