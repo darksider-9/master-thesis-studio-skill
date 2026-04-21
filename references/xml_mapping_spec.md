@@ -32,6 +32,19 @@ Classify body nodes as:
 - `equation`: paragraph containing OMML.
 - `caption_figure` / `caption_table`: paragraph containing SEQ field.
 
+## Reverse Parse Behavior
+
+Reverse parsing converts an existing user Word into a project workspace, but it is optional and should run only after user confirmation.
+
+- Use the same heading detection rules to assign paragraphs, figures, tables, and equations to the current level-1 chapter. Do not treat front matter, TOC, list-of-figures, list-of-tables, or loose placeholders as chapter assets.
+- A real embedded image is usable only when its paragraph contains a drawing/pict/VML relationship and the target media exists in `word/media`. Extract usable images to `04_figures/` and record chapter, caption, source relationship, file path, and `usable` in `figures_manifest.md` and `09_state/reverse_parse_assets.json`.
+- Figure captions usually follow the image paragraph, so prefer the next adjacent caption for images; fall back to the previous adjacent caption only if needed.
+- Word tables should be mapped under the current chapter. Prefer the previous adjacent table caption, then the next adjacent caption. Extract table cells into both Markdown and CSV under `05_tables/`, and mark empty or placeholder-like tables as not usable.
+- Chapter drafts should represent real tables as `[[TBL:caption]]` followed by a Markdown pipe table. On writeback, this real Markdown table takes priority over fallback generated rows.
+- Extract OMML formula text from `m:t`, not only from normal `w:t`. Standalone equations become `[[EQ:formula]]`; inline math becomes `[[SYM:formula]]`.
+- Strip existing equation numbers such as `#(2.1)` during reverse parsing. The writer regenerates equation numbers as `(chapter.index)` during XML writeback.
+- Do not emit generic formula placeholders such as `[[EQ:公式]]` when OMML text is available. If OMML text is missing, mark the formula as needing manual repair.
+
 ## Writeback Behavior
 
 - Preserve front matter and back matter.
